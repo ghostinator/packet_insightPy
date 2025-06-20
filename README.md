@@ -1,181 +1,204 @@
 # Packet Insight 🕵️‍♂️📦
 
 **Advanced PCAP Analysis for Support Engineers**  
-Packet Insight simplifies network diagnostics by transforming complex packet captures into actionable insights. Designed for support teams, it highlights critical issues and performance metrics without requiring deep protocol expertise.
+Packet Insight turns complex packet captures into actionable, easy-to-understand insights. Designed for field and support teams, it highlights critical issues, performance metrics, and anomalies—no deep protocol expertise required.
 
 ---
 
 ## Features
 
 ### 🚀 Optimized Performance
-- **100x faster** than full packet analysis  
-- Header-only processing (`-s 128` capture)  
-- Memory-efficient streaming  
-- Real-time progress tracking  
+- Header-only processing for fast analysis
+- Memory-efficient streaming, handles large captures
+- Real-time progress tracking
 
 ### 🔍 Advanced Diagnostics
-- **Bandwidth Analysis**:  
-  - Throughput (Mbps)  
-  - Data volume (MB)  
-  - Packet size distribution  
-- **Connection Quality**:  
-  - TCP handshake delays  
-  - UDP jitter measurements  
-- **Protocol-Specific Issues**:  
-  - TCP retransmissions/resets  
-  - DNS failures  
-  - HTTP error codes (4xx/5xx)  
-- **Top Talkers & Conversations**  
+- **Bandwidth Analysis:** Throughput, data volume, packet size distribution
+- **Connection Quality:** TCP handshake delays, UDP jitter
+- **Protocol Issues:** TCP retransmissions/resets, DNS failures, HTTP error codes
+- **Top Talkers & Conversations:** Quickly identify heavy hitters and key flows
 
 ### ⚠️ Intelligent Alerts
-- Automatic warnings for:  
-  - High retransmission rates (>5%)  
-  - Excessive TCP handshake delays (>0.5s)  
-  - Critical HTTP error patterns  
+- Warnings for high retransmission rates, excessive handshake delays, and HTTP errors
+- Automated anomaly detection using customizable baselines
+
+---
+
+## Requirements
+
+| OS       | Python | Packet Capture Tool | Additional Notes                          |
+|----------|--------|--------------------|-------------------------------------------|
+| Windows  | 3.6+   | [Npcap](https://npcap.com/) (via Wireshark) | Run as Administrator                      |
+| macOS    | 3.6+   | [Wireshark](https://www.wireshark.org/)     | Install via Homebrew; use `sudo`          |
+| Linux    | 3.6+   | `tshark` (`apt install tshark`)             | Use `sudo` or add user to `wireshark` group|
+
+**Python dependencies:**  
+```bash
+pip install pyshark tqdm
+```
 
 ---
 
 ## Installation
 
-```
-# Clone repository
-git clone https://github.com/ghostinator/packet_insightPy.git
-cd packet-insight
+### 1. Install Python and Dependencies
 
-# Install dependencies
-pip install -r requirements.txt
-```
+- [Download Python](https://www.python.org/downloads/) (ensure "Add to PATH" is checked on Windows)
+- Install required Python packages:
+  ```bash
+  pip install pyshark tqdm
+  ```
 
-**Requirements**:  
-- Python 3.6+  
-- `pyshark`  
-- `tqdm` (for progress bars)  
+### 2. Install Packet Capture Tools
+
+- **Windows:**  
+  Install [Wireshark](https://www.wireshark.org/) and ensure Npcap is selected during installation.
+
+- **macOS:**  
+  ```bash
+  brew install wireshark
+  ```
+
+- **Linux (Debian/Ubuntu):**  
+  ```bash
+  sudo apt update
+  sudo apt install tshark
+  sudo usermod -aG wireshark $USER
+  newgrp wireshark
+  ```
 
 ---
 
 ## Usage
 
+### Basic Analysis
+```bash
+python packet_insight.py path/to/capture.pcap
 ```
-python packet_insight.py <path_to_pcap_file>
+
+### Interactive Mode (Recommended for New Users)
+```bash
+python packet_insight.py --interactive
 ```
 
-### Example Output
-```
-[+] Analyzing capture.pcap...
-Processing packets: 100%|████████| 15000/15000 [00:28<00:00, 520pkt/s]
-
-## Network Summary [Packets: 15000 | Duration: 300.24s]
-- Total Data: 94.27 MB
-- Estimated Throughput: 2.51 Mbps
-
-### Top Issues
-- TCP Retransmissions: 420 ⚠️
-- HTTP Errors: 38 total
-  -  404: 20 errors
-  -  500: 18 errors
-
-⚠️ CRITICAL: High retransmission rate (2.8% > 5% threshold)
+### Live Capture (Requires Admin)
+```bash
+sudo python packet_insight.py --interactive
+# Then choose "Capture and analyze live traffic"
 ```
 
 ---
 
-## Performance Tips
+## Automated Troubleshooting Mode
 
-### For Large PCAPs (>500MB)
-```
-# Use sampling mode (analyze every 100th packet)
-python packet_insight.py large_capture.pcap --sample 100
+Packet Insight includes a rapid diagnostics mode:
 
-# Limit to critical traffic
-python packet_insight.py large_capture.pcap --filter "tcp.analysis.retransmission"
-```
+- **Checks for a baseline** (creates one if missing)
+- **Captures a new sample** (default: 2 minutes)
+- **Analyzes and compares** to the baseline
+- **Highlights anomalies** in key metrics
 
-### Common Filters
-| Filter | Purpose |
-|--------|---------|
-| `--filter "http"` | HTTP traffic only |
-| `--filter "dns"` | DNS analysis |
-| `--filter "tcp.analysis.retransmission"` | Focus on retransmissions |
+**Usage:**
 
----
+- **macOS/Linux:**  
+  ```bash
+  sudo python packet_insight.py --troubleshoot
+  ```
+- **Windows (as Administrator):**  
+  ```cmd
+  python packet_insight.py --troubleshoot
+  ```
 
-## Customization
-
-### Adding New Checks
-Edit the `analyze_pcap()` function to add:
-```
-# VoIP quality monitoring
-if 'RTP' in packet:
-    jitter = calculate_jitter(packet)
-    stats['voip_jitter'].append(jitter)
-```
-
-### Threshold Configuration
-Modify these alert thresholds:
-```
-# Alert thresholds (customize these)
-RETRANSMISSION_WARNING = 0.05  # >5% packets
-SYN_DELAY_WARNING = 0.5        # Seconds
+**Tip:**  
+Clear the baseline at any time:
+```bash
+python packet_insight.py --clear-baseline
 ```
 
 ---
 
-## Recommended Integrations
+## Building a Windows Executable
 
-1. **Auto-Generate Reports**:
-   ```
-   python packet_insight.py capture.pcap --html > report.html
-   ```
+**Build on Windows for best results.**
 
-2. **Slack Alerts**:
+1. [Install Python for Windows](https://www.python.org/downloads/windows/)
+2. Install dependencies:
+   ```cmd
+   pip install pyinstaller pyshark tqdm
    ```
-   if stats['retransmissions'] > 1000:
-       send_slack_alert("High retransmissions detected!")
+3. Download and extract the [Wireshark Portable ZIP](https://www.wireshark.org/download.html) into a `tshark` folder in your project (for portable builds).
+4. Build:
+   ```cmd
+   pyinstaller --onefile --add-data "tshark/*;tshark" packet_insight.py
    ```
-
-3. **Baseline Comparison**:
-   ```
-   compare_to_baseline(stats, "normal_network.json")
-   ```
+5. Find `packet_insight.exe` in the `dist` folder.
 
 ---
 
 ## Troubleshooting
 
-**Issue**: `ImportError: No module named 'pyshark'`  
-**Solution**: `pip install pyshark`
+### Permission Errors
+- **Linux/macOS:**  
+  Ensure you run as root or your user is in the `wireshark` group.
+- **Windows:**  
+  Always "Run as Administrator" for live capture.
 
-**Issue**: Slow processing on huge PCAPs  
-**Solution**: Use `--sample 1000` for 0.1% packet sampling
+### Capture Issues
+- **No interfaces found:** Run as admin/root.
+- **Missing packets:** Try disabling firewall/antivirus during capture.
+- **Slow processing:** Use protocol filters (e.g., `--filter "tcp"`).
+
+### TShark Not Found
+- **Windows:**  
+  Ensure `tshark.exe` is in the `tshark` folder or that Wireshark is installed.
+- **macOS/Linux:**  
+  Ensure `tshark` is installed and in your PATH.
+
+---
+
+## Recommended Workflow
+
+1. **Establish Baseline:**  
+   ```bash
+   sudo python baseline_manager.py baseline_capture.pcap
+   ```
+2. **Capture Issue:**  
+   ```bash
+   sudo tcpdump -i en0 -w issue_capture.pcap
+   ```
+3. **Analyze:**  
+   ```bash
+   python packet_insight.py issue_capture.pcap
+   ```
+
+---
+
+## Platform Notes
+
+- **macOS:**  
+  - Use `brew install wireshark`
+  - For wireless capture, disconnect from WiFi first
+  - Interface names: `en0` (Ethernet), `en1` (WiFi)
+
+- **Windows:**  
+  - Ensure Npcap is installed (not WinPcap)
+  - Add `PacketInsight.exe` to antivirus exclusions if flagged
+
+- **Linux:**  
+  - Add your user to `wireshark` group for non-root capture
 
 ---
 
 ## License
-[MIT License](LICENSE) - Free for commercial and personal use
 
-> "By analysts, for support teams" - Someone out there, probably. 
+[MIT License](LICENSE) — Free for commercial and personal use
+
+---
 
 
-## Key Documentation Updates
+> "By analysts, for support teams" — someone somewhere probably
 
-1. **Performance Section**:
-   - Added CLI options for sampling (`--sample`) and filtering (`--filter`)
-   - Specific guidance for >500MB files
+---
 
-2. **Customization Guide**:
-   - Clear examples for adding new protocol checks
-   - Threshold configuration instructions
+**Happy packet analyzing!** 🚀
 
-3. **Troubleshooting**:
-   - Common installation issues
-   - Performance optimization tips
-
-4. **Integration Examples**:
-   - HTML reporting
-   - Slack alerts
-   - Baseline comparisons
-
-5. **Visual Enhancements**:
-   - Emoji-based status indicators (⚠️, 🚀, 🔍)
-   - Filter reference table
-   - Warning annotations in sample output

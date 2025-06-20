@@ -1,172 +1,261 @@
 #!/usr/bin/env python3
 """
-Packet Insight - Advanced PCAP Analysis Tool
-Simplifies network diagnostics for support engineers
+Packet Insight - Portable Network Analysis Tool
 """
+import argparse
+import os
 import sys
-import pyshark
 import time
-from collections import defaultdict
-from tqdm import tqdm
+import json
+import subprocess
+import platform
+from packet_utils import analyze_pcap, generate_report, get_baseline_type, load_baseline, save_baseline
 
-def analyze_pcap(pcap_path):
-    """Optimized PCAP analyzer with advanced diagnostics"""
+# Configuration
+BASELINE_PATH = "network_baselines.json"
+DEFAULT_INTERFACE = "en0" if platform.system() == "Darwin" else "eth0"
+
+def detect_network_interface():
+    """Automatically detect primary network interface"""
+    system = platform.system()
     try:
-        print(f"\n[+] Analyzing {pcap_path}...")
-        start_time = time.time()
-        
-        # Optimized capture configuration
-        cap = pyshark.FileCapture(
-            pcap_path,
-            display_filter='tcp || udp || icmp || dns || http',
-            only_summaries=False,
-            custom_parameters=['-s 128'],  # Capture only first 128 bytes
-            debug=False,
-            keep_packets=False
-        )
-        
-        # Initialize diagnostics
-        stats = {
-            'packet_count': 0,
-            'total_bytes': 0,
-            'start_timestamp': float('inf'),
-            'end_timestamp': 0,
-            'retransmissions': 0,
-            'resets': 0,
-            'dns_issues': 0,
-            'http_errors': defaultdict(int),
-            'tcp_syn_delays': [],
-            'udp_jitter': [],
-            'top_talkers': defaultdict(int),
-            'protocols': defaultdict(int),
-            'conversations': defaultdict(int),
-            'throughput_samples': []
-        }
+        if system == "Darwin":  # macOS
+            result = subprocess.run(["route", "-n", "get", "default"], 
+                                   capture_output=True, text=True, check=True)
+            for line in result.stdout.splitlines():
+                if "interface:" in line:
+                    return line.split()[-1]
+        elif system == "Linux":
+            result = subprocess.run(["ip", "route", "show", "default"], 
+                                   capture_output=True, text=True, check=True)
+            if result.stdout:
+                return result.stdout.split()[4]
+    except Exception:
+        pass
+    return DEFAULT_INTERFACE
 
-        prev_packet_time = None
-        prev_udp_time = {}
-        
-        # Process packets with progress bar
-        for packet in tqdm(cap, desc="Processing packets", unit="pkt"):
-            stats['packet_count'] += 1
-            try:
-                current_time = float(packet.sniff_timestamp)
-                
-                # Track time range
-                stats['start_timestamp'] = min(stats['start_timestamp'], current_time)
-                stats['end_timestamp'] = max(stats['end_timestamp'], current_time)
-                
-                # Track packet size
-                if hasattr(packet, 'length'):
-                    packet_size = int(packet.length)
-                    stats['total_bytes'] += packet_size
-                    stats['throughput_samples'].append((current_time, packet_size))
-                
-                # Track protocols
-                protocol = packet.transport_layer or packet.highest_layer
-                stats['protocols'][protocol] += 1
-                
-                # IP layer analysis
-                if 'IP' in packet:
-                    src, dst = packet.ip.src, packet.ip.dst
-                    stats['top_talkers'][src] += 1
-                    stats['top_talkers'][dst] += 1
-                    stats['conversations'][(src, dst)] += 1
-                
-                # TCP diagnostics
-                if 'TCP' in packet:
-                    if hasattr(packet.tcp, 'analysis_retransmission'):
-                        stats['retransmissions'] += 1
-                    if 'RST' in str(packet.tcp.flags):
-                        stats['resets'] += 1
-                    if 'SYN' in str(packet.tcp.flags) and not hasattr(packet.tcp, 'analysis_acks_frame'):
-                        stats['tcp_syn_delays'].append(current_time)
-                
-                # UDP diagnostics (per flow)
-                if 'UDP' in packet:
-                    flow_key = (packet.ip.src, packet.ip.dst, packet.udp.srcport, packet.udp.dstport)
-                    if flow_key in prev_udp_time:
-                        stats['udp_jitter'].append(current_time - prev_udp_time[flow_key])
-                    prev_udp_time[flow_key] = current_time
-                
-                # Application layer diagnostics
-                if 'DNS' in packet:
-                    if packet.dns.flags_response == '0' and not hasattr(packet.dns, 'response_time'):
-                        stats['dns_issues'] += 1
-                
-                if 'HTTP' in packet:
-                    if hasattr(packet.http, 'response_code'):
-                        code = packet.http.response_code
-                        if code.startswith(('4', '5')):
-                            stats['http_errors'][code] += 1
-            
-            except AttributeError:
-                # Skip packets with missing layers
-                continue
-        
-        # Post-processing calculations
-        processing_time = time.time() - start_time
-        capture_duration = stats['end_timestamp'] - stats['start_timestamp']
-        avg_packet_size = stats['total_bytes'] / stats['packet_count'] if stats['packet_count'] else 0
-        
-        # Calculate throughput
-        throughput = 0
-        if capture_duration > 0:
-            throughput = stats['total_bytes'] * 8 / capture_duration  # bps
-        
-        # Generate report
-        print(f"\n[✓] Analysis completed in {processing_time:.2f}s")
-        print(f"\n## Network Summary [Packets: {stats['packet_count']} | Duration: {capture_duration:.2f}s]")
-        print(f"- Total Data: {stats['total_bytes'] / 1e6:.2f} MB")
-        print(f"- Avg Packet Size: {avg_packet_size:.0f} bytes")
-        print(f"- Estimated Throughput: {throughput / 1e6:.2f} Mbps")
-        
-        print("\n### Protocol Distribution")
-        for proto, count in stats['protocols'].items():
-            print(f"- {proto}: {count} packets ({count/stats['packet_count']:.1%})")
-        
-        print("\n### Top Issues")
-        print(f"- TCP Retransmissions: {stats['retransmissions']}")
-        print(f"- TCP Resets: {stats['resets']}")
-        print(f"- DNS Timeouts/Failures: {stats['dns_issues']}")
-        
-        if stats['http_errors']:
-            print(f"- HTTP Errors: {sum(stats['http_errors'].values())} total")
-            for code, count in stats['http_errors'].items():
-                print(f"  • {code}: {count} errors")
-        
-        if stats['tcp_syn_delays']:
-            avg_delay = sum(stats['tcp_syn_delays'])/len(stats['tcp_syn_delays'])
-            print(f"- Avg TCP Handshake Delay: {avg_delay:.4f}s")
-            if avg_delay > 0.5:
-                print("  ⚠️ WARNING: High SYN delay (>0.5s)")
-        
-        if stats['udp_jitter']:
-            avg_jitter = sum(stats['udp_jitter'])/len(stats['udp_jitter'])
-            print(f"- Avg UDP Jitter: {avg_jitter:.4f}s")
-            if avg_jitter > 0.1:
-                print("  ⚠️ WARNING: High jitter (>0.1s)")
-        
-        # Critical issue warnings
-        if stats['retransmissions'] > stats['packet_count'] * 0.05:
-            rate = stats['retransmissions']/stats['packet_count']
-            print(f"\n⚠️ CRITICAL: High retransmission rate ({rate:.1%} > 5% threshold)")
-        
-        print("\n### Top 5 Talkers")
-        for ip, count in sorted(stats['top_talkers'].items(), key=lambda x: x[1], reverse=True)[:5]:
-            print(f"- {ip}: {count} packets")
-            
-        print("\n### Top 3 Conversations")
-        for (src, dst), count in sorted(stats['conversations'].items(), key=lambda x: x[1], reverse=True)[:3]:
-            print(f"- {src} ↔ {dst}: {count} packets")
-            
+def capture_packets(duration=60, filename="capture.pcap", interface=None):
+    """Capture live packets with automatic tool selection"""
+    if not interface:
+        interface = detect_network_interface()
+    
+    print(f"\n[+] Starting packet capture on {interface} for {duration} seconds...")
+    
+    # Try tcpdump first (faster and more reliable)
+    try:
+        subprocess.run(
+            ["tcpdump", "-i", interface, "-w", filename, "-G", str(duration), "-W", "1"],
+            check=True,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+        print(f"[✓] Capture saved to {filename}")
+        return filename
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        print("[!] tcpdump not found. Using PyShark fallback...")
+        return capture_with_pyshark(duration, filename, interface)
+
+def capture_with_pyshark(duration, filename, interface):
+    """Fallback capture using PyShark"""
+    try:
+        import pyshark
+        capture = pyshark.LiveCapture(
+            interface=interface,
+            output_file=filename,
+            custom_parameters=['-s 128']
+        )
+        capture.sniff(timeout=duration)
+        return filename
     except Exception as e:
-        print(f"\n[!] Error: {e}")
-        import traceback
-        traceback.print_exc()
+        print(f"[!] Capture failed: {e}")
+        return None
+
+def interactive_mode():
+    """Interactive mode for portable troubleshooting"""
+    print("\n" + "="*50)
+    print("Packet Insight - Network Diagnostics")
+    print("="*50)
+    
+    # Check for existing baseline
+    baseline = load_baseline()
+    baseline_exists = baseline and any(baseline.values())
+    interface = detect_network_interface()
+    
+    while True:
+        print("\nOptions:")
+        print("1. Capture new baseline")
+        print("2. Analyze existing PCAP file")
+        print("3. Capture and analyze live traffic")
+        print("4. View current baseline")
+        print("5. Clear baseline")
+        print("6. Exit")
+        
+        choice = input("\nEnter your choice: ").strip()
+        
+        if choice == "1":  # Capture new baseline
+            duration = int(input("Capture duration (seconds) [60]: ") or 60)
+            filename = input("Output filename [baseline.pcap]: ") or "baseline.pcap"
+            captured_file = capture_packets(duration, filename, interface)
+            if captured_file:
+                print("\n[+] Creating baseline from capture...")
+                update_baseline(captured_file)
+        
+        elif choice == "2":  # Analyze existing PCAP
+            pcap_file = input("Path to PCAP file: ").strip()
+            if not os.path.exists(pcap_file):
+                print(f"[!] File not found: {pcap_file}")
+            else:
+                stats = analyze_pcap(pcap_file)
+                generate_report(stats)
+                
+                # Offer to save as baseline
+                if baseline_exists and input("\nSave as baseline? [y/N]: ").lower() == 'y':
+                    update_baseline(pcap_file)
+        
+        elif choice == "3":  # Live capture and analysis
+            duration = int(input("Capture duration (seconds) [60]: ") or 60)
+            filename = input("Output filename [live_capture.pcap]: ") or "live_capture.pcap"
+            captured_file = capture_packets(duration, filename, interface)
+            if captured_file:
+                stats = analyze_pcap(captured_file)
+                generate_report(stats)
+                
+                # Offer to save as baseline
+                if input("\nSave as baseline? [y/N]: ").lower() == 'y':
+                    update_baseline(captured_file)
+        
+        elif choice == "4":  # View baseline
+            if baseline_exists:
+                print("\nCurrent Baseline Values:")
+                for period, metrics in baseline.items():
+                    print(f"\n{period.capitalize()}:")
+                    for metric, value in metrics.items():
+                        print(f"  - {metric}: {value:.4f}")
+            else:
+                print("\nNo baseline established yet")
+        
+        elif choice == "5":  # Clear baseline
+            if os.path.exists(BASELINE_PATH):
+                os.remove(BASELINE_PATH)
+                print("[✓] Baseline cleared")
+                baseline_exists = False
+            else:
+                print("[!] Baseline file not found")
+        
+        elif choice == "6":  # Exit
+            print("Exiting...")
+            sys.exit(0)
+        
+        else:
+            print("[!] Invalid choice")
+        
+        input("\nPress Enter to continue...")
+
+def update_baseline(pcap_path):
+    """Update baseline from PCAP file"""
+    stats = analyze_pcap(pcap_path)
+    if stats['packet_count'] == 0:
+        print("[!] Error: No packets processed. Cannot create baseline.")
+        return
+    
+    baseline_type = get_baseline_type()
+    baseline_data = load_baseline() or {"workday": {}, "weekend": {}}
+    
+    # Calculate metrics
+    baseline_data[baseline_type] = {
+        "tcp_retransmission_rate": stats['retransmissions'] / stats['packet_count'],
+        "tcp_resets": stats['resets'],
+        "avg_tcp_handshake_delay": (
+            sum(stats['tcp_syn_delays'])/len(stats['tcp_syn_delays']) 
+            if stats['tcp_syn_delays'] else 0
+        ),
+        "avg_udp_jitter": (
+            sum(stats['udp_jitter'])/len(stats['udp_jitter']) 
+            if stats['udp_jitter'] else 0
+        ),
+        "http_error_rate": (
+            sum(stats['http_errors'].values()) / stats['packet_count']
+        )
+    }
+    
+    save_baseline(baseline_data)
+    print(f"[✓] {baseline_type.capitalize()} baseline updated")
+
+def portable_troubleshoot():
+    """Automatic troubleshooting workflow"""
+    # Check if baseline exists
+    if not os.path.exists(BASELINE_PATH):
+        print("No baseline found. Creating initial baseline...")
+        capture_packets(60, "baseline.pcap")
+        update_baseline("baseline.pcap")
+    
+    # Capture current traffic
+    print("Capturing network traffic for analysis...")
+    capture_file = "troubleshoot.pcap"
+    capture_packets(120, capture_file)
+    
+    # Analyze and compare
+    stats = analyze_pcap(capture_file)
+    generate_report(stats)
+    
+    # Highlight anomalies
+    baseline = load_baseline()
+    if baseline:
+        baseline_type = get_baseline_type()
+        current_metrics = {
+            "tcp_retransmission_rate": stats['retransmissions'] / stats['packet_count'],
+            "http_error_rate": sum(stats['http_errors'].values()) / stats['packet_count']
+        }
+        
+        print("\n### Baseline Comparison")
+        for metric, value in current_metrics.items():
+            baseline_value = baseline[baseline_type].get(metric, 0)
+            deviation = abs(value - baseline_value) / baseline_value if baseline_value else 0
+            if deviation > 0.5:
+                print(f"⚠️ {metric.replace('_', ' ').title()}: "
+                      f"{value:.4f} vs baseline {baseline_value:.4f} "
+                      f"({deviation:.0%} deviation)")
 
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        print("Usage: ./packet_insight.py <path_to_pcap>")
-        sys.exit(1)
-    analyze_pcap(sys.argv[1])
+    parser = argparse.ArgumentParser(description='Packet Insight - Portable Network Diagnostics')
+    parser.add_argument('pcap_file', nargs='?', help='Path to PCAP file')
+    parser.add_argument('--interactive', action='store_true', help='Launch interactive mode')
+    parser.add_argument('--troubleshoot', action='store_true', help='Automatic troubleshooting mode')
+    parser.add_argument('--clear-baseline', action='store_true', help='Clear existing baseline')
+    args = parser.parse_args()
+    
+    # Handle clear baseline request
+    if args.clear_baseline:
+        if os.path.exists(BASELINE_PATH):
+            os.remove(BASELINE_PATH)
+            print("[✓] Baseline cleared")
+        else:
+            print("[!] Baseline file not found")
+        sys.exit(0)
+    
+    # Automatic troubleshooting mode
+    if args.troubleshoot:
+        portable_troubleshoot()
+        sys.exit(0)
+    
+    # Launch interactive mode if requested or no file provided
+    if args.interactive or not args.pcap_file:
+        interactive_mode()
+    else:
+        # Verify file exists
+        if not os.path.exists(args.pcap_file):
+            print(f"[!] Error: File '{args.pcap_file}' not found")
+            if input("Launch interactive mode? [Y/n]: ").lower() != 'n':
+                interactive_mode()
+            else:
+                sys.exit(1)
+        
+        # Analyze provided PCAP
+        stats = analyze_pcap(args.pcap_file)
+        generate_report(stats)
+        
+        # Offer to save as baseline
+        baseline = load_baseline()
+        if baseline and any(baseline.values()):
+            if input("\nSave as baseline? [y/N]: ").lower() == 'y':
+                update_baseline(args.pcap_file)

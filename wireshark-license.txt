@@ -1,0 +1,3 @@
+Portions of this software utilize TShark from Wireshark (GPLv2).
+Wireshark is available at https://www.wireshark.org/
+Full license: https://www.gnu.org/licenses/old-licenses/gpl-2.0.html

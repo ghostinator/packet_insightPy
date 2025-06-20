@@ -1,0 +1,10 @@
+{
+  "workday": {
+    "tcp_retransmission_rate": 0.008693507614526173,
+    "tcp_resets": 0,
+    "avg_tcp_handshake_delay": 0,
+    "avg_udp_jitter": 1.818022749484231,
+    "http_error_rate": 0.0
+  },
+  "weekend": {}
+}
