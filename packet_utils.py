@@ -11,6 +11,43 @@ from tqdm import tqdm
 import sys
 import pyshark
 import platform
+import subprocess
+
+def get_active_interfaces():
+    """Detect active network interfaces with IP addresses"""
+    active_interfaces = []
+    system = platform.system()
+    
+    if system == "Windows":
+        try:
+            # Get interface list with tshark
+            tshark_path = get_tshark_path()
+            result = subprocess.run([tshark_path, "-D"], capture_output=True, text=True, check=True)
+            interfaces = result.stdout.splitlines()
+            
+            # Parse tshark output
+            for iface in interfaces:
+                if " (" in iface and ")" in iface:
+                    # Extract interface name from "1. \Device\NPF_{GUID} (Ethernet)"
+                    name = iface.split("(", 1)[1].rsplit(")", 1)[0].strip()
+                    active_interfaces.append(name)
+        except Exception:
+            # Fallback to netsh
+            result = subprocess.run(["netsh", "interface", "show", "interface"], capture_output=True, text=True, check=True)
+            for line in result.stdout.splitlines():
+                if "Connected" in line and "Dedicated" in line:
+                    parts = line.split()
+                    if len(parts) > 3:
+                        active_interfaces.append(" ".join(parts[3:]))
+    else:  # macOS/Linux
+        import netifaces
+        for iface in netifaces.interfaces():
+            addrs = netifaces.ifaddresses(iface)
+            if netifaces.AF_INET in addrs or netifaces.AF_INET6 in addrs:
+                active_interfaces.append(iface)
+    
+    return active_interfaces
+
 
 def set_tshark_path():
     """

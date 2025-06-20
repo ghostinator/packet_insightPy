@@ -34,12 +34,54 @@ def detect_network_interface():
         pass
     return DEFAULT_INTERFACE
 
+def get_active_interfaces():
+    """Detect active network interfaces with IP addresses"""
+    active_interfaces = []
+    system = platform.system()
+    
+    if system == "Windows":
+        try:
+            # Get interface list with tshark
+            from pyshark.tshark.tshark import get_tshark_path
+            tshark_path = get_tshark_path()
+            result = subprocess.run([tshark_path, "-D"], capture_output=True, text=True, check=True)
+            interfaces = result.stdout.splitlines()
+            
+            # Parse tshark output
+            for iface in interfaces:
+                if " (" in iface and ")" in iface:
+                    # Extract interface name from "1. \Device\NPF_{GUID} (Ethernet)"
+                    name = iface.split("(", 1)[1].rsplit(")", 1)[0].strip()
+                    active_interfaces.append(name)
+        except Exception:
+            # Fallback to netsh
+            result = subprocess.run(["netsh", "interface", "show", "interface"], 
+                                   capture_output=True, text=True, check=True)
+            for line in result.stdout.splitlines():
+                if "Connected" in line and "Dedicated" in line:
+                    parts = line.split()
+                    if len(parts) > 3:
+                        active_interfaces.append(" ".join(parts[3:]))
+    else:  # macOS/Linux
+        try:
+            import netifaces
+            for iface in netifaces.interfaces():
+                addrs = netifaces.ifaddresses(iface)
+                if netifaces.AF_INET in addrs or netifaces.AF_INET6 in addrs:
+                    active_interfaces.append(iface)
+        except ImportError:
+            # If netifaces not installed, fallback to default
+            active_interfaces.append(detect_network_interface())
+    
+    return active_interfaces
+
 def capture_packets(duration=60, filename="capture.pcap", interface=None):
     """Capture live packets with automatic tool selection"""
     if not interface:
-        interface = detect_network_interface()
-    
-    print(f"\n[+] Starting packet capture on {interface} for {duration} seconds...")
+        active_interfaces = get_active_interfaces()
+        interface = active_interfaces[0] if active_interfaces else None
+
+    print(f"\n[+] Starting packet capture on {interface or 'all interfaces'} for {duration} seconds...")
     
     # Try tcpdump first (faster and more reliable)
     try:
@@ -79,7 +121,6 @@ def interactive_mode():
     # Check for existing baseline
     baseline = load_baseline()
     baseline_exists = baseline and any(baseline.values())
-    interface = detect_network_interface()
     
     while True:
         print("\nOptions:")
@@ -95,6 +136,30 @@ def interactive_mode():
         if choice == "1":  # Capture new baseline
             duration = int(input("Capture duration (seconds) [60]: ") or 60)
             filename = input("Output filename [baseline.pcap]: ") or "baseline.pcap"
+            
+            # Auto-detect active interfaces
+            active_interfaces = get_active_interfaces()
+            if not active_interfaces:
+                print("⚠️ No active interfaces found!")
+                continue
+                
+            # Interface selection logic
+            if len(active_interfaces) == 1:
+                interface = active_interfaces[0]
+                print(f"Using active interface: {interface}")
+            else:
+                print("\nActive interfaces:")
+                for i, iface in enumerate(active_interfaces, 1):
+                    print(f"{i}. {iface}")
+                    
+                selection = input("Select interface number (or Enter for all): ")
+                if selection.isdigit() and 0 < int(selection) <= len(active_interfaces):
+                    interface = active_interfaces[int(selection)-1]
+                    print(f"Using interface: {interface}")
+                else:
+                    interface = None
+                    print("Using all interfaces")
+            
             captured_file = capture_packets(duration, filename, interface)
             if captured_file:
                 print("\n[+] Creating baseline from capture...")
@@ -115,6 +180,30 @@ def interactive_mode():
         elif choice == "3":  # Live capture and analysis
             duration = int(input("Capture duration (seconds) [60]: ") or 60)
             filename = input("Output filename [live_capture.pcap]: ") or "live_capture.pcap"
+            
+            # Auto-detect active interfaces
+            active_interfaces = get_active_interfaces()
+            if not active_interfaces:
+                print("⚠️ No active interfaces found!")
+                continue
+                
+            # Interface selection logic
+            if len(active_interfaces) == 1:
+                interface = active_interfaces[0]
+                print(f"Using active interface: {interface}")
+            else:
+                print("\nActive interfaces:")
+                for i, iface in enumerate(active_interfaces, 1):
+                    print(f"{i}. {iface}")
+                    
+                selection = input("Select interface number (or Enter for all): ")
+                if selection.isdigit() and 0 < int(selection) <= len(active_interfaces):
+                    interface = active_interfaces[int(selection)-1]
+                    print(f"Using interface: {interface}")
+                else:
+                    interface = None
+                    print("Using all interfaces")
+            
             captured_file = capture_packets(duration, filename, interface)
             if captured_file:
                 stats = analyze_pcap(captured_file)
