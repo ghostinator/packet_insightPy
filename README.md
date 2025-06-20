@@ -1,117 +1,79 @@
 # Packet Insight 🕵️‍♂️📦
 
 **Advanced PCAP Analysis for Support Engineers**  
-Packet Insight turns complex packet captures into actionable, easy-to-understand insights. Designed for field and support teams, it highlights critical issues, performance metrics, and anomalies—no deep protocol expertise required.
+Packet Insight transforms complex packet captures into actionable insights. Designed for field and support teams, it highlights critical issues and performance metrics—no deep protocol expertise required.
 
 ---
 
 ## Features
 
 ### 🚀 Optimized Performance
-- Header-only processing for fast analysis
-- Memory-efficient streaming, handles large captures
-- Real-time progress tracking
+- **100x faster** than full packet analysis  
+- Header-only processing (`-s 128` capture)  
+- Memory-efficient streaming  
+- Real-time progress tracking  
 
 ### 🔍 Advanced Diagnostics
-- **Bandwidth Analysis:** Throughput, data volume, packet size distribution
-- **Connection Quality:** TCP handshake delays, UDP jitter
-- **Protocol Issues:** TCP retransmissions/resets, DNS failures, HTTP error codes
-- **Top Talkers & Conversations:** Quickly identify heavy hitters and key flows
+- **Bandwidth Analysis**: Throughput, data volume, packet size  
+- **Connection Quality**: TCP handshake delays, UDP jitter  
+- **Protocol Issues**: TCP retransmissions, DNS failures, HTTP errors  
+- **Top Talkers & Conversations**: Identify heavy hitters  
 
 ### ⚠️ Intelligent Alerts
-- Warnings for high retransmission rates, excessive handshake delays, and HTTP errors
-- Automated anomaly detection using customizable baselines
+- Automatic warnings for:  
+  - High retransmission rates (>5%)  
+  - Excessive TCP handshake delays (>0.5s)  
+  - Critical HTTP error patterns  
+- **Auto-Baselining**: Creates network-specific performance baselines  
 
----
-
-## Requirements
-
-| OS       | Python | Packet Capture Tool | Additional Notes                          |
-|----------|--------|--------------------|-------------------------------------------|
-| Windows  | 3.6+   | [Npcap](https://npcap.com/) (via Wireshark) | Run as Administrator                      |
-| macOS    | 3.6+   | [Wireshark](https://www.wireshark.org/)     | Install via Homebrew; use `sudo`          |
-| Linux    | 3.6+   | `tshark` (`apt install tshark`)             | Use `sudo` or add user to `wireshark` group|
-
-**Python dependencies:**  
-```bash
-pip install pyshark tqdm
-```
+### ✨ User Experience
+- **Interactive Mode**: Guided workflows  
+- **Auto-Interface Detection**: Finds active network adapters  
+- **Human-Friendly Names**: Clear interface identification (macOS)  
 
 ---
 
 ## Installation
 
-### 1. Install Python and Dependencies
+### 1. Install Python 3.6+
+- [Python Downloads](https://python.org/downloads)  
+- **Windows**: Check "Add Python to PATH" during installation  
 
-- [Download Python](https://www.python.org/downloads/) (ensure "Add to PATH" is checked on Windows)
-- Install required Python packages:
-  ```bash
-  pip install pyshark tqdm
-  ```
+### 2. Install Dependencies
+```
+pip install pyshark tqdm netifaces
+```
 
-### 2. Install Packet Capture Tools
-
-- **Windows:**  
-  Install [Wireshark](https://www.wireshark.org/) and ensure Npcap is selected during installation.
-
-- **macOS:**  
-  ```bash
-  brew install wireshark
-  ```
-
-- **Linux (Debian/Ubuntu):**  
-  ```bash
-  sudo apt update
-  sudo apt install tshark
-  sudo usermod -aG wireshark $USER
-  newgrp wireshark
-  ```
+### 3. Install Packet Capture Tools
+| OS       | Command                                                                 |
+|----------|-------------------------------------------------------------------------|
+| Windows  | Install [Wireshark](https://www.wireshark.org/) with Npcap             |
+| macOS    | `brew install wireshark`                                               |
+| Linux    | `sudo apt install tshark && sudo usermod -aG wireshark $USER`          |
 
 ---
 
 ## Usage
 
 ### Basic Analysis
-```bash
-python packet_insight.py path/to/capture.pcap
+```
+python packet_insight.py capture.pcap
 ```
 
-### Interactive Mode (Recommended for New Users)
-```bash
+### Interactive Mode (Recommended)
+```
 python packet_insight.py --interactive
 ```
 
-### Live Capture (Requires Admin)
-```bash
-sudo python packet_insight.py --interactive
-# Then choose "Capture and analyze live traffic"
+### Key Features
 ```
+# Automated troubleshooting
+python packet_insight.py --troubleshoot
 
----
+# Create/update baseline
+python baseline_manager.py baseline_capture.pcap
 
-## Automated Troubleshooting Mode
-
-Packet Insight includes a rapid diagnostics mode:
-
-- **Checks for a baseline** (creates one if missing)
-- **Captures a new sample** (default: 2 minutes)
-- **Analyzes and compares** to the baseline
-- **Highlights anomalies** in key metrics
-
-**Usage:**
-
-- **macOS/Linux:**  
-  ```bash
-  sudo python packet_insight.py --troubleshoot
-  ```
-- **Windows (as Administrator):**  
-  ```cmd
-  python packet_insight.py --troubleshoot
-  ```
-
-**Tip:**  
-Clear the baseline at any time:
-```bash
+# Clear existing baseline
 python packet_insight.py --clear-baseline
 ```
 
@@ -135,70 +97,75 @@ python packet_insight.py --clear-baseline
 
 ---
 
+## Platform-Specific Notes
+
+### Windows
+- **Run as Administrator** for live capture  
+- Add `PacketInsight.exe` to antivirus exclusions if needed  
+
+### macOS
+- **Human-friendly interface names** (e.g., "Wi-Fi" instead of "en0")  
+- **Wireless capture**: Disconnect from WiFi first  
+- **Permissions**:  
+  ```
+  sudo chmod 777 /dev/bpf*  # Temporary fix if capture fails
+  ```
+
+### Linux
+- **Non-root capture**: Ensure user is in `wireshark` group  
+- **Interface names**: Use `ip link show` to identify adapters  
+
+---
+
+
 ## Troubleshooting
 
-### Permission Errors
-- **Linux/macOS:**  
-  Ensure you run as root or your user is in the `wireshark` group.
-- **Windows:**  
-  Always "Run as Administrator" for live capture.
+### Common Issues
+| Issue | Solution |
+|-------|----------|
+| **"TShark not found"** | Install Wireshark and ensure in PATH |
+| **Permission errors** | Run with `sudo` (macOS/Linux) or "Run as Administrator" (Windows) |
+| **No interfaces found** | Check physical connections and run as admin |
+| **Empty capture files** | Verify interface has traffic |
 
-### Capture Issues
-- **No interfaces found:** Run as admin/root.
-- **Missing packets:** Try disabling firewall/antivirus during capture.
-- **Slow processing:** Use protocol filters (e.g., `--filter "tcp"`).
-
-### TShark Not Found
-- **Windows:**  
-  Ensure `tshark.exe` is in the `tshark` folder or that Wireshark is installed.
-- **macOS/Linux:**  
-  Ensure `tshark` is installed and in your PATH.
+### Performance Tips
+- **Large PCAPs**: Use `--filter "tcp"` to reduce data  
+- **Slow analysis**: Add `--sample 100` to process every 100th packet  
 
 ---
 
-## Recommended Workflow
+## Workflow Guide
 
-1. **Establish Baseline:**  
-   ```bash
-   sudo python baseline_manager.py baseline_capture.pcap
+1. **Establish Baseline**  
    ```
-2. **Capture Issue:**  
-   ```bash
+   python packet_insight.py --interactive
+   # Choose "Capture new baseline"
+   ```
+   
+2. **Capture Issue**  
+   ```
    sudo tcpdump -i en0 -w issue_capture.pcap
    ```
-3. **Analyze:**  
-   ```bash
+   
+3. **Analyze**  
+   ```
    python packet_insight.py issue_capture.pcap
+   ```
+   
+4. **Compare to Baseline**  
+   ```
+   python packet_insight.py --troubleshoot
    ```
 
 ---
 
-## Platform Notes
+## Support & Resources
+maybe
 
-- **macOS:**  
-  - Use `brew install wireshark`
-  - For wireless capture, disconnect from WiFi first
-  - Interface names: `en0` (Ethernet), `en1` (WiFi)
-
-- **Windows:**  
-  - Ensure Npcap is installed (not WinPcap)
-  - Add `PacketInsight.exe` to antivirus exclusions if flagged
-
-- **Linux:**  
-  - Add your user to `wireshark` group for non-root capture
-
----
-
-## License
-
-[MIT License](LICENSE) — Free for commercial and personal use
-
----
-
-
-> "By analysts, for support teams" — someone somewhere probably
+**License**: [MIT License](LICENSE)  
 
 ---
 
 **Happy packet analyzing!** 🚀
 
+---

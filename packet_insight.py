@@ -9,6 +9,8 @@ import time
 import json
 import subprocess
 import platform
+import threading
+import pyshark
 from packet_utils import analyze_pcap, generate_report, get_baseline_type, load_baseline, save_baseline
 
 # Configuration
@@ -35,13 +37,15 @@ def detect_network_interface():
     return DEFAULT_INTERFACE
 
 def get_active_interfaces():
-    """Detect active network interfaces with IP addresses"""
+    """Detect active network interfaces with IP addresses cross-platform."""
+    import platform
+    import subprocess
     active_interfaces = []
     system = platform.system()
     
     if system == "Windows":
         try:
-            # Get interface list with tshark
+            # Use tshark to list interfaces
             from pyshark.tshark.tshark import get_tshark_path
             tshark_path = get_tshark_path()
             result = subprocess.run([tshark_path, "-D"], capture_output=True, text=True, check=True)
@@ -51,66 +55,185 @@ def get_active_interfaces():
             for iface in interfaces:
                 if " (" in iface and ")" in iface:
                     # Extract interface name from "1. \Device\NPF_{GUID} (Ethernet)"
-                    name = iface.split("(", 1)[1].rsplit(")", 1)[0].strip()
+                    name = iface.split("(", 1)[1].split(")", 1)[0].strip()
                     active_interfaces.append(name)
         except Exception:
             # Fallback to netsh
-            result = subprocess.run(["netsh", "interface", "show", "interface"], 
-                                   capture_output=True, text=True, check=True)
-            for line in result.stdout.splitlines():
-                if "Connected" in line and "Dedicated" in line:
-                    parts = line.split()
-                    if len(parts) > 3:
-                        active_interfaces.append(" ".join(parts[3:]))
-    else:  # macOS/Linux
+            try:
+                result = subprocess.run(["netsh", "interface", "show", "interface"], 
+                                       capture_output=True, text=True, check=True)
+                for line in result.stdout.splitlines():
+                    if "Connected" in line and "Dedicated" in line:
+                        parts = line.split()
+                        if len(parts) > 3:
+                            active_interfaces.append(" ".join(parts[3:]))
+            except Exception:
+                pass
+    
+    elif system == "Linux":
         try:
+            # Preferred method: netifaces
             import netifaces
             for iface in netifaces.interfaces():
                 addrs = netifaces.ifaddresses(iface)
                 if netifaces.AF_INET in addrs or netifaces.AF_INET6 in addrs:
                     active_interfaces.append(iface)
         except ImportError:
-            # If netifaces not installed, fallback to default
-            active_interfaces.append(detect_network_interface())
+            # Fallback to ip command
+            try:
+                result = subprocess.run(["ip", "-o", "link", "show"], 
+                                       capture_output=True, text=True, check=True)
+                for line in result.stdout.splitlines():
+                    if "state UP" in line:
+                        parts = line.split(':')
+                        if len(parts) > 1:
+                            iface = parts[1].strip().split('@')[0]
+                            active_interfaces.append(iface)
+            except Exception:
+                pass
     
-    return active_interfaces
+    elif system == "Darwin":  # macOS
+        try:
+            # Get mapping of device names to friendly names
+            name_map = get_macos_interface_names()
+            result = subprocess.run(["ifconfig"], capture_output=True, text=True, check=True)
+            current_if = None
+            for line in result.stdout.splitlines():
+                if not line.startswith('\t') and ':' in line:
+                    current_if = line.split(':')[0]
+                if current_if and "inet " in line and "127.0.0.1" not in line:
+                    if current_if not in active_interfaces:
+                        active_interfaces.append(current_if)
+            # Attach friendly names for display
+            interface_display = []
+            for iface in active_interfaces:
+                friendly = name_map.get(iface, "")
+                if friendly:
+                    interface_display.append(f"{iface} ({friendly})")
+                else:
+                    interface_display.append(iface)
+            return interface_display
+        except Exception as e:
+            print(f"[!] Error detecting interfaces: {e}")
+            active_interfaces = [detect_network_interface()]
+
+    
+    return active_interfaces or [detect_network_interface()]
+
+def extract_device_name(interface_display_name: str) -> str:
+    """Extract device name from display string (e.g., 'en11 (USB LAN)' -> 'en11')"""
+    return interface_display_name.split(' (', 1)[0]
+
+def get_macos_interface_names():
+    """Return a dict mapping device names (en0) to human-friendly names (Wi-Fi, USB Ethernet, etc)."""
+    import platform
+    import subprocess
+    if platform.system() != 'Darwin':
+        return {}
+    try:
+        output = subprocess.check_output(['networksetup', '-listallhardwareports'], text=True)
+        lines = output.splitlines()
+        mapping = {}
+        current_port = None
+        for line in lines:
+            if line.startswith('Hardware Port:'):
+                current_port = line.split(':', 1)[1].strip()
+            elif line.startswith('Device:') and current_port:
+                device = line.split(':', 1)[1].strip()
+                mapping[device] = current_port
+                current_port = None
+        return mapping
+    except Exception as e:
+        return {}
+
+
+def get_tshark_path():
+    """Find tshark executable with cross-platform support"""
+    system = platform.system()
+    
+    # Try common paths first
+    common_paths = {
+        "Windows": [
+            r"C:\Program Files\Wireshark\tshark.exe",
+            r"C:\Program Files (x86)\Wireshark\tshark.exe"
+        ],
+        "Darwin": [
+            "/Applications/Wireshark.app/Contents/MacOS/tshark",
+            "/usr/local/bin/tshark"
+        ],
+        "Linux": [
+            "/usr/bin/tshark"
+        ]
+    }
+    
+    # Check if tshark is in PATH
+    try:
+        subprocess.run(["tshark", "-v"], check=True, 
+                      stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        return "tshark"
+    except Exception:
+        pass
+    
+    # Check platform-specific paths
+    for path in common_paths.get(system, []):
+        if os.path.exists(path):
+            return path
+    
+    return None
 
 def capture_packets(duration=60, filename="capture.pcap", interface=None):
-    """Capture live packets with automatic tool selection"""
-    if not interface:
-        active_interfaces = get_active_interfaces()
-        interface = active_interfaces[0] if active_interfaces else None
+    tshark_path = get_tshark_path()
+    if not tshark_path:
+        print("[!] tshark not found. Please ensure Wireshark is installed.")
+        return None
 
-    print(f"\n[+] Starting packet capture on {interface or 'all interfaces'} for {duration} seconds...")
+    # Extract device name if interface contains friendly name
+    device_name = extract_device_name(interface) if interface else None
+
+    # Build capture command
+    cmd = [
+        tshark_path,
+        "-i", device_name or "any",
+        "-a", f"duration:{duration}",
+        "-w", filename,
+        "-s", "128"  # Header-only capture
+    ]
     
-    # Try tcpdump first (faster and more reliable)
     try:
-        subprocess.run(
-            ["tcpdump", "-i", interface, "-w", filename, "-G", str(duration), "-W", "1"],
-            check=True,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL
-        )
+        subprocess.run(cmd, check=True)
         print(f"[✓] Capture saved to {filename}")
         return filename
-    except (subprocess.CalledProcessError, FileNotFoundError):
-        print("[!] tcpdump not found. Using PyShark fallback...")
-        return capture_with_pyshark(duration, filename, interface)
-
-def capture_with_pyshark(duration, filename, interface):
-    """Fallback capture using PyShark"""
-    try:
-        import pyshark
-        capture = pyshark.LiveCapture(
-            interface=interface,
-            output_file=filename,
-            custom_parameters=['-s 128']
-        )
-        capture.sniff(timeout=duration)
-        return filename
-    except Exception as e:
+    except subprocess.CalledProcessError as e:
         print(f"[!] Capture failed: {e}")
         return None
+
+
+def prompt_interface_selection(active_interfaces):
+    """Prompt user to select an interface with friendly names"""
+    name_map = get_macos_interface_names() if platform.system() == "Darwin" else {}
+    
+    if len(active_interfaces) == 1:
+        iface = active_interfaces[0]
+        friendly = name_map.get(iface, iface)
+        print(f"Using active interface: {friendly}")
+        return iface
+    else:
+        print("\nMultiple active interfaces detected:")
+        for i, iface in enumerate(active_interfaces, 1):
+            friendly = name_map.get(iface, iface)
+            print(f"{i}. {friendly}")
+        
+        while True:
+            selection = input("Select interface number: ").strip()
+            if selection.isdigit() and 1 <= int(selection) <= len(active_interfaces):
+                selected = active_interfaces[int(selection) - 1]
+                friendly = name_map.get(selected, selected)
+                print(f"Using interface: {friendly}")
+                return selected
+            else:
+                print("Invalid selection. Please enter a valid number.")
+
+
 
 def interactive_mode():
     """Interactive mode for portable troubleshooting"""
@@ -144,21 +267,7 @@ def interactive_mode():
                 continue
                 
             # Interface selection logic
-            if len(active_interfaces) == 1:
-                interface = active_interfaces[0]
-                print(f"Using active interface: {interface}")
-            else:
-                print("\nActive interfaces:")
-                for i, iface in enumerate(active_interfaces, 1):
-                    print(f"{i}. {iface}")
-                    
-                selection = input("Select interface number (or Enter for all): ")
-                if selection.isdigit() and 0 < int(selection) <= len(active_interfaces):
-                    interface = active_interfaces[int(selection)-1]
-                    print(f"Using interface: {interface}")
-                else:
-                    interface = None
-                    print("Using all interfaces")
+            interface = prompt_interface_selection(active_interfaces)
             
             captured_file = capture_packets(duration, filename, interface)
             if captured_file:
@@ -188,21 +297,7 @@ def interactive_mode():
                 continue
                 
             # Interface selection logic
-            if len(active_interfaces) == 1:
-                interface = active_interfaces[0]
-                print(f"Using active interface: {interface}")
-            else:
-                print("\nActive interfaces:")
-                for i, iface in enumerate(active_interfaces, 1):
-                    print(f"{i}. {iface}")
-                    
-                selection = input("Select interface number (or Enter for all): ")
-                if selection.isdigit() and 0 < int(selection) <= len(active_interfaces):
-                    interface = active_interfaces[int(selection)-1]
-                    print(f"Using interface: {interface}")
-                else:
-                    interface = None
-                    print("Using all interfaces")
+            interface = prompt_interface_selection(active_interfaces)
             
             captured_file = capture_packets(duration, filename, interface)
             if captured_file:
@@ -241,34 +336,53 @@ def interactive_mode():
         input("\nPress Enter to continue...")
 
 def update_baseline(pcap_path):
-    """Update baseline from PCAP file"""
+    """Update baseline from PCAP file with enhanced reliability"""
     stats = analyze_pcap(pcap_path)
     if stats['packet_count'] == 0:
         print("[!] Error: No packets processed. Cannot create baseline.")
-        return
+        return False
     
     baseline_type = get_baseline_type()
     baseline_data = load_baseline() or {"workday": {}, "weekend": {}}
     
-    # Calculate metrics
-    baseline_data[baseline_type] = {
-        "tcp_retransmission_rate": stats['retransmissions'] / stats['packet_count'],
-        "tcp_resets": stats['resets'],
-        "avg_tcp_handshake_delay": (
-            sum(stats['tcp_syn_delays'])/len(stats['tcp_syn_delays']) 
-            if stats['tcp_syn_delays'] else 0
-        ),
-        "avg_udp_jitter": (
-            sum(stats['udp_jitter'])/len(stats['udp_jitter']) 
-            if stats['udp_jitter'] else 0
-        ),
-        "http_error_rate": (
-            sum(stats['http_errors'].values()) / stats['packet_count']
-        )
-    }
+    # Calculate metrics with safety checks
+    try:
+        baseline_data[baseline_type] = {
+            "tcp_retransmission_rate": safe_divide(stats['retransmissions'], stats['packet_count']),
+            "tcp_resets": stats['resets'],
+            "avg_tcp_handshake_delay": safe_divide(sum(stats['tcp_syn_delays']), len(stats['tcp_syn_delays'])) if stats['tcp_syn_delays'] else 0,
+            "avg_udp_jitter": safe_divide(sum(stats['udp_jitter']), len(stats['udp_jitter'])) if stats['udp_jitter'] else 0,
+            "http_error_rate": safe_divide(sum(stats['http_errors'].values()), stats['packet_count'])
+        }
+    except Exception as e:
+        print(f"[!] Error calculating metrics: {e}")
+        return False
     
-    save_baseline(baseline_data)
-    print(f"[✓] {baseline_type.capitalize()} baseline updated")
+    # Save with atomic write and error handling
+    try:
+        abs_path = os.path.abspath(BASELINE_PATH)
+        os.makedirs(os.path.dirname(abs_path), exist_ok=True)
+        
+        # Atomic write to prevent corruption
+        temp_path = abs_path + ".tmp"
+        with open(temp_path, 'w') as f:
+            json.dump(baseline_data, f, indent=2)
+        
+        # Replace existing file
+        if os.path.exists(abs_path):
+            os.remove(abs_path)
+        os.rename(temp_path, abs_path)
+        
+        print(f"[✓] {baseline_type.capitalize()} baseline updated")
+        print(f"    Saved to: {abs_path}")
+        return True
+    except Exception as e:
+        print(f"[!] Failed to save baseline: {e}")
+        return False
+
+def safe_divide(numerator, denominator):
+    """Safe division with zero handling"""
+    return numerator / denominator if denominator else 0
 
 def portable_troubleshoot():
     """Automatic troubleshooting workflow"""
