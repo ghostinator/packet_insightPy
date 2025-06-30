@@ -3,6 +3,8 @@
 **Advanced PCAP Analysis for Support Engineers**  
 Packet Insight transforms complex packet captures into actionable insights. Designed for field and support teams, it highlights critical issues and performance metrics—no deep protocol expertise required.
 
+![Untitled](https://github.com/user-attachments/assets/c8727993-72c0-433c-8297-28b103e657d3)
+
 ---
 
 ## Features
