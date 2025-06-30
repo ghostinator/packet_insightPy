@@ -6,7 +6,7 @@ import argparse
 import json
 import os
 import sys
-from packet_utils import analyze_pcap, get_baseline_type, load_baseline, save_baseline
+from packet_utils import analyze_pcap_safe as analyze_pcap, get_baseline_type, load_baseline, save_baseline
 
 BASELINE_PATH = "network_baselines.json"
 

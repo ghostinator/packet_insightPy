@@ -16,9 +16,13 @@ a = Analysis(
     datas=[
         ('../packet_utils.py', '.'),
         ('../baseline_manager.py', '.'),
-        ('../live_capture.py', '.')
+        ('../live_capture.py', '.'),
+        ('../export.py', '.'),
+        ('../config.py', '.'),
+        ('../packet_insight.yaml', '.')
     ],
-    hiddenimports=['pyshark', 'tqdm', 'json', 'argparse', 'subprocess', 'os', 'sys', 'time', 'platform', 'collections', 'datetime'],
+    hiddenimports=['pyshark', 'tqdm', 'json', 'argparse', 'subprocess', 'os', 'sys', 'time', 'platform', 
+                  'collections', 'datetime', 'netifaces', 'yaml', 'csv', 'threading'],
     hookspath=[],
     hooksconfig={},
     runtime_hooks=[],

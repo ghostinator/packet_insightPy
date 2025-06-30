@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
 Packet Insight - Portable Network Analysis Tool
+VERSION = "1.0.0"
 """
 import argparse
 import os
@@ -11,7 +12,10 @@ import subprocess
 import platform
 import threading
 import pyshark
-from packet_utils import analyze_pcap, generate_report, get_baseline_type, load_baseline, save_baseline
+from packet_utils import analyze_pcap_safe as analyze_pcap, generate_report, get_baseline_type, load_baseline, save_baseline
+from config import PacketInsightConfig
+from export import export_report
+from live_capture import get_active_interfaces, prompt_interface_selection
 
 # Configuration
 BASELINE_PATH = "network_baselines.json"
@@ -245,6 +249,9 @@ def interactive_mode():
     baseline = load_baseline()
     baseline_exists = baseline and any(baseline.values())
     
+    # Load configuration
+    config = PacketInsightConfig.from_file()
+    
     while True:
         print("\nOptions:")
         print("1. Capture new baseline")
@@ -252,7 +259,9 @@ def interactive_mode():
         print("3. Capture and analyze live traffic")
         print("4. View current baseline")
         print("5. Clear baseline")
-        print("6. Exit")
+        print("6. Export configuration")
+        print("7. Import configuration")
+        print("8. Exit")
         
         choice = input("\nEnter your choice: ").strip()
         
@@ -279,16 +288,63 @@ def interactive_mode():
             if not os.path.exists(pcap_file):
                 print(f"[!] File not found: {pcap_file}")
             else:
+                # Ask for output format
+                print("\nOutput format options:")
+                print("1. Text (console output)")
+                print("2. JSON file")
+                print("3. CSV file")
+                print("4. HTML report")
+                format_choice = input("Select format [1]: ").strip() or "1"
+                
+                output_format = "text"
+                if format_choice == "2":
+                    output_format = "json"
+                elif format_choice == "3":
+                    output_format = "csv"
+                elif format_choice == "4":
+                    output_format = "html"
+                
+                # Analyze the file
                 stats = analyze_pcap(pcap_file)
-                generate_report(stats)
+                
+                # Generate report in selected format
+                if output_format == "text":
+                    generate_report(stats)
+                else:
+                    export_report(stats, output_format)
                 
                 # Offer to save as baseline
-                if baseline_exists and input("\nSave as baseline? [y/N]: ").lower() == 'y':
+                if input("\nSave as baseline? [y/N]: ").lower() == 'y':
                     update_baseline(pcap_file)
         
         elif choice == "3":  # Live capture and analysis
             duration = int(input("Capture duration (seconds) [60]: ") or 60)
             filename = input("Output filename [live_capture.pcap]: ") or "live_capture.pcap"
+            
+            # Ask about rolling captures
+            use_rolling = input("Use rolling captures? [y/N]: ").lower() == 'y'
+            rolling_size = None
+            rolling_interval = None
+            
+            if use_rolling:
+                rolling_size = int(input(f"Roll after size in MB [{config.rolling_capture_size_mb}]: ") or config.rolling_capture_size_mb)
+                rolling_interval = int(input(f"Roll after minutes [{config.rolling_capture_interval_min}]: ") or config.rolling_capture_interval_min)
+            
+            # Ask for output format
+            print("\nOutput format options:")
+            print("1. Text (console output)")
+            print("2. JSON file")
+            print("3. CSV file")
+            print("4. HTML report")
+            format_choice = input("Select format [1]: ").strip() or "1"
+            
+            output_format = "text"
+            if format_choice == "2":
+                output_format = "json"
+            elif format_choice == "3":
+                output_format = "csv"
+            elif format_choice == "4":
+                output_format = "html"
             
             # Auto-detect active interfaces
             active_interfaces = get_active_interfaces()
@@ -299,14 +355,34 @@ def interactive_mode():
             # Interface selection logic
             interface = prompt_interface_selection(active_interfaces)
             
-            captured_file = capture_packets(duration, filename, interface)
-            if captured_file:
-                stats = analyze_pcap(captured_file)
-                generate_report(stats)
-                
-                # Offer to save as baseline
-                if input("\nSave as baseline? [y/N]: ").lower() == 'y':
-                    update_baseline(captured_file)
+            if use_rolling:
+                # Use the enhanced live capture with rolling files
+                from live_capture import live_analysis
+                try:
+                    live_analysis(
+                        interface=interface,
+                        output_format=output_format,
+                        rolling_size_mb=rolling_size,
+                        rolling_interval_min=rolling_interval,
+                        enable_alerts=True
+                    )
+                except KeyboardInterrupt:
+                    print("\nCapture stopped by user.")
+            else:
+                # Use traditional single-file capture
+                captured_file = capture_packets(duration, filename, interface)
+                if captured_file:
+                    stats = analyze_pcap(captured_file)
+                    
+                    # Generate report in selected format
+                    if output_format == "text":
+                        generate_report(stats)
+                    else:
+                        export_report(stats, output_format)
+                    
+                    # Offer to save as baseline
+                    if input("\nSave as baseline? [y/N]: ").lower() == 'y':
+                        update_baseline(captured_file)
         
         elif choice == "4":  # View baseline
             if baseline_exists:
@@ -326,7 +402,43 @@ def interactive_mode():
             else:
                 print("[!] Baseline file not found")
         
-        elif choice == "6":  # Exit
+        elif choice == "6":  # Export configuration
+            config_format = input("Configuration format (yaml/ini) [yaml]: ").strip().lower() or "yaml"
+            if config_format not in ["yaml", "ini"]:
+                print("[!] Invalid format. Using YAML.")
+                config_format = "yaml"
+                
+            config_path = input(f"Output path [packet_insight.{config_format}]: ").strip() or f"packet_insight.{config_format}"
+            
+            # Save configuration
+            config.save_to_file(config_path)
+        
+        elif choice == "7":  # Import configuration
+            config_path = input("Path to configuration file: ").strip()
+            if not os.path.exists(config_path):
+                print(f"[!] File not found: {config_path}")
+            else:
+                # Load configuration from file
+                new_config = PacketInsightConfig.from_file(config_path)
+                
+                # Update the configuration in other modules
+                import packet_utils
+                packet_utils.config = new_config
+                
+                import report_generator
+                report_generator.config = new_config
+                
+                import export
+                export.config = new_config
+                
+                import live_capture
+                live_capture.config = new_config
+                
+                # Update current config
+                config = new_config
+                print(f"[✓] Configuration imported from {config_path}")
+        
+        elif choice == "8":  # Exit
             print("Exiting...")
             sys.exit(0)
         
@@ -358,23 +470,12 @@ def update_baseline(pcap_path):
         print(f"[!] Error calculating metrics: {e}")
         return False
     
-    # Save with atomic write and error handling
+    # Save baseline data
     try:
-        abs_path = os.path.abspath(BASELINE_PATH)
-        os.makedirs(os.path.dirname(abs_path), exist_ok=True)
-        
-        # Atomic write to prevent corruption
-        temp_path = abs_path + ".tmp"
-        with open(temp_path, 'w') as f:
-            json.dump(baseline_data, f, indent=2)
-        
-        # Replace existing file
-        if os.path.exists(abs_path):
-            os.remove(abs_path)
-        os.rename(temp_path, abs_path)
+        save_baseline(baseline_data)
         
         print(f"[✓] {baseline_type.capitalize()} baseline updated")
-        print(f"    Saved to: {abs_path}")
+        print(f"    Saved to: {os.path.abspath(BASELINE_PATH)}")
         return True
     except Exception as e:
         print(f"[!] Failed to save baseline: {e}")
@@ -425,7 +526,44 @@ if __name__ == "__main__":
     parser.add_argument('--interactive', action='store_true', help='Launch interactive mode')
     parser.add_argument('--troubleshoot', action='store_true', help='Automatic troubleshooting mode')
     parser.add_argument('--clear-baseline', action='store_true', help='Clear existing baseline')
+    parser.add_argument('--config', help='Path to configuration file')
+    parser.add_argument('--export-config', help='Export default configuration to specified file')
+    
+    # Output format options
+    parser.add_argument('--format', choices=['text', 'json', 'csv', 'html'], default='text',
+                      help='Output format for analysis results')
+    parser.add_argument('--output', help='Output file path for reports')
+    
+    # Live capture options
+    parser.add_argument('--live', action='store_true', help='Perform live capture instead of analyzing a file')
+    parser.add_argument('--interface', help='Network interface for live capture')
+    parser.add_argument('--duration', type=int, default=60, help='Duration in seconds for live capture')
+    parser.add_argument('--rolling-size', type=int, help='Start a new capture file after reaching this size in MB')
+    parser.add_argument('--rolling-interval', type=int, help='Start a new capture file after this many minutes')
+    
     args = parser.parse_args()
+    
+    # Load configuration
+    config = PacketInsightConfig.from_file(args.config)
+    
+    # Update the configuration in other modules
+    import packet_utils
+    packet_utils.config = config
+    
+    import report_generator
+    report_generator.config = config
+    
+    import export
+    export.config = config
+    
+    import live_capture
+    live_capture.config = config
+    
+    # Export configuration if requested
+    if args.export_config:
+        config.save_to_file(args.export_config)
+        print(f"Configuration exported to {args.export_config}")
+        sys.exit(0)
     
     # Handle clear baseline request
     if args.clear_baseline:
@@ -434,6 +572,32 @@ if __name__ == "__main__":
             print("[✓] Baseline cleared")
         else:
             print("[!] Baseline file not found")
+        sys.exit(0)
+    
+    # Live capture mode
+    if args.live:
+        from live_capture import live_analysis
+        
+        # Determine interface
+        interface = args.interface
+        if not interface:
+            active_interfaces = get_active_interfaces()
+            if not active_interfaces:
+                print("[!] No active interfaces found")
+                sys.exit(1)
+            interface = prompt_interface_selection(active_interfaces)
+        
+        # Start live capture with rolling files if specified
+        try:
+            live_analysis(
+                interface=interface,
+                output_format=args.format,
+                rolling_size_mb=args.rolling_size,
+                rolling_interval_min=args.rolling_interval,
+                enable_alerts=True
+            )
+        except KeyboardInterrupt:
+            print("\nCapture stopped by user.")
         sys.exit(0)
     
     # Automatic troubleshooting mode
@@ -455,7 +619,12 @@ if __name__ == "__main__":
         
         # Analyze provided PCAP
         stats = analyze_pcap(args.pcap_file)
-        generate_report(stats)
+        
+        # Generate report in selected format
+        if args.format == "text":
+            generate_report(stats)
+        else:
+            export_report(stats, args.format, args.output)
         
         # Offer to save as baseline
         baseline = load_baseline()
